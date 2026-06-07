@@ -23,7 +23,7 @@ jobs:
           
           # Die DTB (Hier ist Vorsicht geboten!)
           # Wenn du eine fertige R36S DTB hast:
-          cp rk3326-r36s-linux.dtb oc_package/rk3326-xu10.dtb
+          cp rk3326-xu10-linux.dtb oc_package/rk3326-xu10-linux.dtb
           
           # Erstelle ein Archiv für den Download
           zip -r oc_package.zip oc_package
