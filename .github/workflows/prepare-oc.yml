@@ -1,0 +1,35 @@
+name: Prepare Overclock Files
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Prepare Artifacts
+        run: |
+          # Hier erstellen wir eine saubere Struktur für deine SD-Karte
+          mkdir -p oc_package
+          
+          # Wir kopieren die relevanten Dateien (Passe die Namen ggf. an)
+          # 'Image.oc' ist der OC-Kernel, den wir umbenennen oder so lassen
+          cp Image.oc oc_package/Image
+          
+          # Die DTB (Hier ist Vorsicht geboten!)
+          # Wenn du eine fertige R36S DTB hast:
+          cp rk3326-r36s-linux.dtb oc_package/rk3326-xu10.dtb
+          
+          # Erstelle ein Archiv für den Download
+          zip -r oc_package.zip oc_package
+
+      - name: Upload Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: overclock-package
+          path: oc_package.zip
