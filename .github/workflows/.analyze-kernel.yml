@@ -1,0 +1,34 @@
+name: Analyze Kernel Image
+
+on:
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Scan for Frequency Patterns
+        run: |
+          # 1296000000 in hex ist 0x4D43F900 (Little Endian: 00 F9 43 4D)
+          # Wir suchen nach dieser Sequenz im Binary
+          echo "Suche nach der 1296 MHz Frequenz (00 F9 43 4D)..."
+          
+          # 'grep' mit Hex-Pattern suchen
+          # -a: Datei als Text behandeln
+          # -o: Nur die Fundstellen ausgeben
+          # -b: Byte-Offset angeben
+          
+          # Wir nutzen hexdump, um den Bereich zu sehen
+          hexdump -v -e '1/1 "%02X " "\n"' Image | grep -A 8 "00 F9 43 4D" > frequenz_tabelle.txt
+          
+          echo "Ergebnisse der Suche:"
+          cat frequenz_tabelle.txt
+
+      - name: Upload Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-analysis
+          path: frequenz_tabelle.txt
