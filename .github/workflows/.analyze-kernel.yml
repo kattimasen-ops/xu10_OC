@@ -1,34 +1,42 @@
-name: Analyze Kernel Image
+name: Advanced Kernel Forensics
 
 on:
   workflow_dispatch:
 
 jobs:
-  analyze:
+  forensics:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Scan for Frequency Patterns
-        run: |
-          # 1296000000 in hex ist 0x4D43F900 (Little Endian: 00 F9 43 4D)
-          # Wir suchen nach dieser Sequenz im Binary
-          echo "Suche nach der 1296 MHz Frequenz (00 F9 43 4D)..."
-          
-          # 'grep' mit Hex-Pattern suchen
-          # -a: Datei als Text behandeln
-          # -o: Nur die Fundstellen ausgeben
-          # -b: Byte-Offset angeben
-          
-          # Wir nutzen hexdump, um den Bereich zu sehen
-          hexdump -v -e '1/1 "%02X " "\n"' Image | grep -A 8 "00 F9 43 4D" > frequenz_tabelle.txt
-          
-          echo "Ergebnisse der Suche:"
-          cat frequenz_tabelle.txt
+      - name: Install Analysis Tools
+        run: sudo apt-get update && sudo apt-get install -y binwalk
 
-      - name: Upload Results
+      - name: Analyze Binary Structure
+        run: |
+          echo "--- Suche nach Kompressions-Headern ---"
+          # -B führt eine Signaturanalyse durch
+          binwalk Image > analysis.txt
+          
+          echo "--- Extraktions-Versuch ---"
+          # -e extrahiert automatisch, was erkannt wurde
+          binwalk -e Image || echo "Keine automatische Extraktion möglich."
+          
+          echo "--- Inhalt der Extraktion (falls vorhanden) ---"
+          find _Image.extracted -type f 2>/dev/null || echo "Keine Dateien extrahiert."
+
+      - name: Deep Search in Extracted Data
+        run: |
+          echo "--- Suche nach Frequenzwerten in extrahierten Daten ---"
+          # Wir suchen in allen extrahierten Dateien nach den Hex-Werten
+          # 1296 MHz (00 F9 43 4D) und 1416 MHz (00 3C 68 54)
+          grep -rE "(\x00\xF9\x43\x4D|\x00\x3C\x68\x54)" _Image.extracted 2>/dev/null || echo "Werte nicht in extrahierten Daten gefunden."
+
+      - name: Upload Logs
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-analysis
-          path: frequenz_tabelle.txt
+          name: forensics-report
+          path: |
+            analysis.txt
+            _Image.extracted/
