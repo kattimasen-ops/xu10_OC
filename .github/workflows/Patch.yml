@@ -1,0 +1,143 @@
+name: Patch XU10 DTB and Kernel
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch: # Ermöglicht das manuelle Starten über die GitHub-Oberfläche
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Device Tree Compiler
+        run: sudo apt-get update && sudo apt-get install -y device-tree-compiler
+
+      - name: Execute Overclock Patch Script for XU10
+        shell: pwsh
+        run: |
+          # Dateipfade für den MagicX XU10
+          $dtb = "$PWD/rk3326-xu10-linux.dtb"
+          $dtbBak = "$PWD/rk3326-xu10-linux.dtb.original"
+          $image = "$PWD/Image"
+          $imageBak = "$PWD/Image.original"
+          $imageOc = "$PWD/Image.oc"
+
+          # Bei Fehlern sofort abbrechen
+          $ErrorActionPreference = "Stop"
+
+          function Stop-WithMessage {
+              param([string]$Message)
+              Write-Host "ERROR: $Message"
+              exit 1
+          }
+
+          function Replace-First {
+              param([string]$Text, [string]$Pattern, [string]$Replacement, [string]$Label)
+              $rx = [regex]::new($Pattern, [System.Text.RegularExpressions.RegexOptions]::Singleline)
+              if (-not $rx.IsMatch($Text)) { Stop-WithMessage "Could not apply change: $Label" }
+              return $rx.Replace($Text, $Replacement, 1)
+          }
+
+          function Find-NodeRange {
+              param([string]$Text, [string]$NodeName)
+              $idx = $Text.IndexOf($NodeName + " {")
+              if ($idx -lt 0) { $idx = $Text.IndexOf($NodeName + "{") }
+              if ($idx -lt 0) { return $null }
+              $brace = $Text.IndexOf("{", $idx)
+              $depth = 0
+              for ($i = $brace; $i -lt $Text.Length; $i++) {
+                  $ch = $Text[$i]
+                  if ($ch -eq "{") { $depth++ }
+                  elseif ($ch -eq "}") {
+                      $depth--
+                      if ($depth -eq 0) {
+                          $end = $Text.IndexOf(";", $i)
+                          if ($end -lt 0) { $end = $i } else { $end++ }
+                          return @{ Start = $idx; End = $end; Node = $Text.Substring($idx, $end - $idx) }
+                      }
+                  }
+              }
+              return $null
+          }
+
+          function Replace-Property-In-Node {
+              param([string]$Text, [string]$NodeName, [string]$PropertyName, [string]$NewValue, [string]$Label)
+              $range = Find-NodeRange -Text $Text -NodeName $NodeName
+              if ($null -eq $range) { Stop-WithMessage "Could not find node: $NodeName" }
+              $pattern = "($([regex]::Escape($PropertyName))\s*=\s*)<[^;]+>;"
+              $replacement = '${1}' + $NewValue + ';'
+              $rx = [regex]::new($pattern, [System.Text.RegularExpressions.RegexOptions]::Singleline)
+              if (-not $rx.IsMatch($range.Node)) { Stop-WithMessage "Could not find property $PropertyName inside node $NodeName ($Label)" }
+              $newNode = $rx.Replace($range.Node, $replacement, 1)
+              return $Text.Substring(0, $range.Start) + $newNode + $Text.Substring($range.End)
+          }
+
+          function Opp-Block {
+              param([int64]$Freq, [int]$Uv)
+              $freqHex = "{0:x}" -f $Freq
+              $uvHex = "{0:x}" -f $Uv
+              return "`n`topp-$Freq {`n`t`topp-hz = <0x00 0x$freqHex>;`n`t`topp-microvolt = <0x$uvHex 0x$uvHex 0x$uvHex>;`n`t`topp-microvolt-L0 = <0x$uvHex 0x$uvHex 0x$uvHex>;`n`t`topp-microvolt-L1 = <0x$uvHex 0x$uvHex 0x$uvHex>;`n`t`topp-microvolt-L2 = <0x$uvHex 0x$uvHex 0x$uvHex>;`n`t`topp-microvolt-L3 = <0x$uvHex 0x$uvHex 0x$uvHex>;`n`t`tclock-latency-ns = <0x9c40>;`n`t};"
+          }
+
+          function Normalize-Or-Add-Opp {
+              param([string]$Text, [int64]$Freq, [int]$Uv, [int64]$AnchorFreq)
+              $range = Find-NodeRange -Text $Text -NodeName "opp-$Freq"
+              $newNode = (Opp-Block -Freq $Freq -Uv $Uv).Trim("`r", "`n")
+              if ($null -ne $range) { return $Text.Substring(0, $range.Start) + $newNode + $Text.Substring($range.End) }
+              $anchor = Find-NodeRange -Text $Text -NodeName "opp-$AnchorFreq"
+              if ($null -eq $anchor) { Stop-WithMessage "Could not find anchor opp-$AnchorFreq to insert opp-$Freq" }
+              return $Text.Substring(0, $anchor.End) + "`n" + (Opp-Block -Freq $Freq -Uv $Uv) + $Text.Substring($anchor.End)
+          }
+
+          function Assert-Patched-Dts {
+              param([string]$Text)
+              $cpuOpp = Find-NodeRange -Text $Text -NodeName "cpu0-opp-table"
+              if ($null -eq $cpuOpp -or $cpuOpp.Node -notmatch 'rockchip,max-volt\s*=\s*<0x155cc0>;') { Stop-WithMessage "Verification failed on cpu0-opp-table" }
+              $dcdc = Find-NodeRange -Text $Text -NodeName "DCDC_REG2"
+              if ($null -eq $dcdc -or $dcdc.Node -notmatch 'regulator-max-microvolt\s*=\s*<0x155cc0>;') { Stop-WithMessage "Verification failed on DCDC_REG2" }
+              Write-Host "DTS verification passed."
+          }
+
+          # 1. Prüfen ob alle benötigten Dateien existieren
+          if (-not (Test-Path $dtb)) { Stop-WithMessage "rk3326-xu10-linux.dtb nicht im Root-Verzeichnis gefunden." }
+          if (-not (Test-Path $image)) { Stop-WithMessage "Image nicht gefunden." }
+          if (-not (Test-Path $imageOc)) { Stop-WithMessage "Image.oc nicht gefunden." }
+
+          # 2. Decompilieren der DTB -> DTS
+          $tmpDts = "$env:RUNNER_TEMP/patch.dts"
+          $tmpDtb = "$env:RUNNER_TEMP/patch.dtb"
+          dtc -I dtb -O dts -o $tmpDts $dtb
+
+          # 3. Anwenden der Overclock-Patches
+          $s = Get-Content -Raw -LiteralPath $tmpDts
+          $s = Replace-First -Text $s -Pattern '(cpu0-opp-table\s*\{.*?rockchip,max-volt\s*=\s*)<[^;]+>;' -Replacement '${1}<0x155cc0>;' -Label 'cpu0-opp-table max-volt'
+          $s = Replace-Property-In-Node -Text $s -NodeName "DCDC_REG2" -PropertyName "regulator-max-microvolt" -NewValue "<0x155cc0>" -Label "DCDC_REG2 regulator-max-microvolt"
+
+          # Frequenzen und Spannungen setzen (1.368 GHz bis 1.512 GHz)
+          $s = Normalize-Or-Add-Opp -Text $s -Freq 1368000000 -Uv 1350000 -AnchorFreq 1296000000
+          $s = Normalize-Or-Add-Opp -Text $s -Freq 1416000000 -Uv 1400000 -AnchorFreq 1368000000
+          $s = Normalize-Or-Add-Opp -Text $s -Freq 1440000000 -Uv 1400000 -AnchorFreq 1416000000
+          $s = Normalize-Or-Add-Opp -Text $s -Freq 1464000000 -Uv 1400000 -AnchorFreq 1440000000
+          $s = Normalize-Or-Add-Opp -Text $s -Freq 1488000000 -Uv 1400000 -AnchorFreq 1464000000
+          $s = Normalize-Or-Add-Opp -Text $s -Freq 1512000000 -Uv 1400000 -AnchorFreq 1488000000
+
+          Set-Content -LiteralPath $tmpDts -Value $s -NoNewline
+          Assert-Patched-Dts -Text $s
+
+          # 4. Re-Compilieren der veränderten DTS zurück in DTB
+          dtc -I dts -O dtb -o $dtb $tmpDts
+          Copy-Item -LiteralPath $imageOc -Destination $image -Force
+
+          Write-Host "Patch für XU10 erfolgreich angewendet!"
+
+      - name: Upload gepatchte Dateien als Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xu10-overclock-files
+          path: |
+            rk3326-xu10-linux.dtb
+            Image
