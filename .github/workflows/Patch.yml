@@ -20,8 +20,8 @@ jobs:
         shell: pwsh
         run: |
           # Dateipfade für den MagicX XU10
-          $dtb = "$PWD/rg32tw3ka.patched.dtb"
-          $dtbBak = "$PWD/rg32tw3ka.patched.dtb.original"
+          $dtb = "$PWD/rk3326-k36s-linux.dtb"
+          $dtbBak = "$PWD/rk3326-k36s-linux.dtb.original"
           $image = "$PWD/Image"
           $imageBak = "$PWD/Image.original"
           $imageOc = "$PWD/Image.oc"
@@ -103,7 +103,7 @@ jobs:
           }
 
           # 1. Prüfen ob alle benötigten Dateien existieren
-          if (-not (Test-Path $dtb)) { Stop-WithMessage "rk3326-xu10-linux.dtb nicht im Root-Verzeichnis gefunden." }
+          if (-not (Test-Path $dtb)) { Stop-WithMessage "rk3326-k36s-linux.dtb nicht im Root-Verzeichnis gefunden." }
           if (-not (Test-Path $image)) { Stop-WithMessage "Image nicht gefunden." }
           if (-not (Test-Path $imageOc)) { Stop-WithMessage "Image.oc nicht gefunden." }
 
@@ -139,5 +139,5 @@ jobs:
         with:
           name: xu10-overclock-files
           path: |
-            rg32tw3ka.patched.dtb
+            rk3326-k36s-linux.dtb
             Image
