@@ -20,8 +20,8 @@ jobs:
         shell: pwsh
         run: |
           # Dateipfade für den MagicX XU10
-          $dtb = "$PWD/rk3326-xu10-linux.dtb"
-          $dtbBak = "$PWD/rk3326-xu10-linux.dtb.original"
+          $dtb = "$PWD/rg32tw3ka.patched.dtb"
+          $dtbBak = "$PWD/rg32tw3ka.patched.dtb.original"
           $image = "$PWD/Image"
           $imageBak = "$PWD/Image.original"
           $imageOc = "$PWD/Image.oc"
@@ -139,5 +139,5 @@ jobs:
         with:
           name: xu10-overclock-files
           path: |
-            rk3326-xu10-linux.dtb
+            rg32tw3ka.patched.dtb
             Image
