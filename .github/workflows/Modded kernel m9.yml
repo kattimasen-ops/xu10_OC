@@ -1,44 +1,22 @@
-name: Build Ultimate M9 Pro Optimized Image & Kernel
+name: Build & Hex-Patch Perfect M9 Pro Image
 
 on:
-  push:
-    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
-  build-ultimate:
+  build-and-patch-image:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install System Dependencies & Toolchain
+      - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
                               bison flex libncurses-dev libssl-dev bc libelf-dev \
-                              device-tree-compiler python3 powershell binwalk zip git
-
-      - name: Execute Binary & String Patches
-        run: |
-          python3 - << 'EOF'
-          import os, sys
-
-          target_filename = "console_detect"
-          for root, dirs, files in os.walk("."):
-              if target_filename in files:
-                  path = os.path.join(root, target_filename)
-                  with open(path, "rb") as f:
-                      data = f.read()
-                  old = b"rk3326-r36tmax-linux.dtb"
-                  new = b"rk3326-m9pro-linux.dtb\x00\x00"
-                  if old in data:
-                      data = data.replace(old, new)
-                      with open(path, "wb") as f:
-                          f.write(data)
-                      print(f"[+] Patched binary string in {path}")
-          EOF
+                              python3 curl gzip bzip2 lzop xz-utils liblz4-tool zstd llvm binutils zip git
 
       - name: Clone RK3326 Kernel Source
         run: |
@@ -46,11 +24,10 @@ jobs:
           cd kernel_source
           make ARCH=arm64 rk3326_defconfig
 
-      - name: Strip Debug Bloat & Apply Hardcore Kernel Configs
+      - name: Apply Hardcore Configs & Strip Debug Bloat
         run: |
           cd kernel_source
-          
-          # Debugging-Overhead entfernen, um Cache zu sparen
+          # Debugging-Overhead entfernen, um Cache-Effizienz zu maximieren
           sed -i 's/CONFIG_DEBUG_KERNEL=y/# CONFIG_DEBUG_KERNEL is not set/' .config
           sed -i 's/CONFIG_DEBUG_INFO=y/# CONFIG_DEBUG_INFO is not set/' .config
           sed -i 's/CONFIG_PAGE_POISONING=y/# CONFIG_PAGE_POISONING is not set/' .config
@@ -74,88 +51,71 @@ jobs:
           export KCFLAGS="-march=armv8-a+crc+crypto -mtune=cortex-a35 -O3 -pipe -fomit-frame-pointer -flto"
           export LDFLAGS="-flto"
           
-          make -j$(nproc) Image dtbs
+          make -j$(nproc) Image
 
-      - name: Execute Advanced Overclock & DTB Patch
-        shell: pwsh
+      - name: Unpack & Analyze Kernel Binary (Inspirationsbasis aus Unpack & Disassemble)
         run: |
-          $dtb = Get-ChildItem -Filter "*.dtb" -Recurse | Select-Object -First 1
-          if (-not $dtb) {
-              # Fallback: Suche im frisch geklonten Kernel Source
-              $dtb = Get-ChildItem -Path "kernel_source" -Filter "*.dtb" -Recurse | Select-Object -First 1
-          }
+          curl -sSL https://raw.githubusercontent.com/torvalds/linux/master/scripts/extract-vmlinux -o extract-vmlinux
+          chmod +x extract-vmlinux
           
-          if (-not $dtb) {
-              Write-Host "ERROR: Keine .dtb Datei gefunden!"
-              exit 1
-          }
+          ./extract-vmlinux kernel_source/arch/arm64/boot/Image > vmlinux_uncompressed
           
-          $dtbPath = $dtb.FullName
-          Write-Host "Verwende DTB: $dtbPath"
+          echo "=== Kernel Version & Frequenz-Check ==="
+          strings vmlinux_uncompressed | grep -i "Linux version" || true
+          strings vmlinux_uncompressed | grep -E "1296000|1368000|1512000" | head -n 20 || true
 
-          $tmpDts = "$env:RUNNER_TEMP/patch.dts"
-          dtc -I dtb -O dts -o $tmpDts $dtbPath
-
-          $s = Get-Content -Raw -LiteralPath $tmpDts
-          
-          # OPP-Tabellen und Spannungs-Obergrenzen für den RK3326 anpassen
-          $s = [System.Text.RegularExpressions.Regex]::Replace($s, '(cpu0-opp-table\s*\{.*?rockchip,max-volt\s*=\s*)<[^;]+>;', '${1}<0x155cc0>;')
-          
-          # Frequenzen bis 1.512 GHz einbrennen
-          $frequencies = @(
-              @{Freq=1368000000; Uv=1350000; Anchor=1296000000},
-              @{Freq=1416000000; Uv=1400000; Anchor=1368000000},
-              @{Freq=1440000000; Uv=1400000; Anchor=1416000000},
-              @{Freq=1464000000; Uv=1400000; Anchor=1440000000},
-              @{Freq=1488000000; Uv=1400000; Anchor=1464000000},
-              @{Freq=1512000000; Uv=1400000; Anchor=1488000000}
-          )
-
-          foreach ($item in $frequencies) {
-              if ($s -notmatch "opp-$($item.Freq)") {
-                  $anchorStr = "opp-$($item.Anchor)"
-                  $anchorIdx = $s.IndexOf($anchorStr)
-                  if ($anchorIdx -ge 0) {
-                      $block = "`n`topp-$($item.Freq) {`n`t`topp-hz = <0x00 0x$([string]::Format('{0:x}',$item.Freq))>;`n`t`topp-microvolt = <0x$([string]::Format('{0:x}', $item.Uv)) 0x$([string]::Format('{0:x}', $item.Uv)) 0x$([string]::Format('{0:x}', $item.Uv))>;`n`t`tclock-latency-ns = <0x9c40>;`n`t};"
-                      $braceDepth = 0$insertIdx = -1
-                      for ($i = $anchorIdx; $i -lt $s.Length; $i++) {
-                          if ($s[$i] -eq '{') {$braceDepth++ }
-                          elseif ($s[$i] -eq '}') {$braceDepth--
-                              if ($braceDepth -eq 0) {$insertIdx = $s.IndexOf(';',$i) + 1
-                                  break
-                              }
-                          }
-                      }
-                      if ($insertIdx -gt 0) {
-                          $s =$s.Insert($insertIdx,$block)
-                      }
-                  }
-              }
-          }
-
-          Set-Content -LiteralPath $tmpDts -Value$s -NoNewline
-          dtc -I dts -O dtb -o $dtbPath$tmpDts
-          Write-Host "DTB erfolgreich auf maximale Performance gepatcht!"
-
-          # Für das Packaging speichern
-          Copy-Item -LiteralPath $dtbPath -Destination "$env:RUNNER_TEMP/patched.dtb" -Force
-
-      - name: Package Final SD-Card Bundle
+      - name: In-Place Hex-Patching des Kernel-Images (Inspirationsbasis aus Patch2)
         run: |
-          mkdir -p final_m9pro_package
+          python3 - << 'EOF'
+          import shutil
+
+          src_image = "kernel_source/arch/arm64/boot/Image"
+          target_image = "Image"
+          shutil.copyfile(src_image, target_image)
+
+          with open(target_image, "rb") as f:
+              data = bytearray(f.read())
+
+          orig_size = len(data)
+          print(f"Originale Kernel-Image-Größe: {orig_size} Bytes")
+
+          # Little-Endian Byte-Muster für Frequenzen (1.296.000 kHz -> 1.512.000 kHz)
+          f_1296 = b"\x80\xC6\x13\x00"
+          f_1512 = b"\xA0\x12\x17\x00"
+
+          c1 = data.count(f_1296)
+          print(f"Gefundene Frequenz-Tabellen-Einträge (1.296 GHz): {c1}")
+          if c1 > 0:
+              data = data.replace(f_1296, f_1512)
+
+          # Fallback-Text-Limits und AVS-Logmeldungen direkt im Binary patchen[cite: 6]
+          s_orig = b"set 1.296"
+          s_patch = b"set 1.512"
+          c2 = data.count(s_orig)
+          print(f"Gefundene Text-Limits: {c2}")
+          if c2 > 0:
+              data = data.replace(s_orig, s_patch)
+
+          if len(data) != orig_size:
+              print("FEHLER: Dateigröße hat sich unerwartet verändert!")
+              exit(1)
+
+          with open(target_image, "wb") as f:
+              f.write(data)
+
+          print("Hex-Patch erfolgreich in das Image-Binary eingebrannt!")
+          EOF
+
+      - name: Package Final M9 Pro Image Bundle
+        run: |
+          mkdir -p final_m9pro_image
+          cp Image final_m9pro_image/Image
           
-          # Kompilierten Kernel kopieren
-          cp kernel_source/arch/arm64/boot/Image final_m9pro_package/Image
-          
-          # Gepatchte DTB kopieren
-          cp ${{ runner.temp }}/patched.dtb final_m9pro_package/rk3326-m9pro-linux.dtb
-          
-          # Archiv schnüren
-          zip -r m9pro_ultimate_optimized_package.zip final_m9pro_package
+          zip -r m9pro_perfect_optimized_image.zip final_m9pro_image
 
       - name: Upload Final Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: m9pro-ultimate-optimized-package
-          path: m9pro_ultimate_optimized_package.zip
+          name: m9pro-perfect-optimized-image
+          path: m9pro_perfect_optimized_image.zip
           retention-days: 30
