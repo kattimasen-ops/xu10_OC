@@ -16,7 +16,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
                               bison flex libncurses-dev libssl-dev bc libelf-dev \
-                              python3 curl gzip bzip2 lzop xz-utils liblz4-tool zstd llvm binutils zip git
+                              python3 curl gzip bzip2 lzop xz-utils lz4 zstd llvm binutils zip git
 
       - name: Clone RK3326 Kernel Source
         run: |
@@ -27,13 +27,11 @@ jobs:
       - name: Apply Hardcore Configs & Strip Debug Bloat
         run: |
           cd kernel_source
-          # Debugging-Overhead entfernen, um Cache-Effizienz zu maximieren
           sed -i 's/CONFIG_DEBUG_KERNEL=y/# CONFIG_DEBUG_KERNEL is not set/' .config
           sed -i 's/CONFIG_DEBUG_INFO=y/# CONFIG_DEBUG_INFO is not set/' .config
           sed -i 's/CONFIG_PAGE_POISONING=y/# CONFIG_PAGE_POISONING is not set/' .config
           sed -i 's/CONFIG_SLUB_DEBUG=y/# CONFIG_SLUB_DEBUG is not set/' .config
           
-          # Low-Latency, 1000Hz Timer & UVC Support aktivieren
           echo "CONFIG_PREEMPT=y" >> .config
           echo "CONFIG_HZ_1000=y" >> .config
           echo "CONFIG_HZ=1000" >> .config
@@ -47,13 +45,12 @@ jobs:
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
           
-          # Maximale Compiler-Optimierungen (-O3, LTO, Frame-Pointer-Entfernung)
           export KCFLAGS="-march=armv8-a+crc+crypto -mtune=cortex-a35 -O3 -pipe -fomit-frame-pointer -flto"
           export LDFLAGS="-flto"
           
           make -j$(nproc) Image
 
-      - name: Unpack & Analyze Kernel Binary (Inspirationsbasis aus Unpack & Disassemble)
+      - name: Unpack & Analyze Kernel Binary
         run: |
           curl -sSL https://raw.githubusercontent.com/torvalds/linux/master/scripts/extract-vmlinux -o extract-vmlinux
           chmod +x extract-vmlinux
@@ -64,7 +61,7 @@ jobs:
           strings vmlinux_uncompressed | grep -i "Linux version" || true
           strings vmlinux_uncompressed | grep -E "1296000|1368000|1512000" | head -n 20 || true
 
-      - name: In-Place Hex-Patching des Kernel-Images (Inspirationsbasis aus Patch2)
+      - name: In-Place Hex-Patching des Kernel-Images
         run: |
           python3 - << 'EOF'
           import shutil
@@ -79,7 +76,6 @@ jobs:
           orig_size = len(data)
           print(f"Originale Kernel-Image-Größe: {orig_size} Bytes")
 
-          # Little-Endian Byte-Muster für Frequenzen (1.296.000 kHz -> 1.512.000 kHz)
           f_1296 = b"\x80\xC6\x13\x00"
           f_1512 = b"\xA0\x12\x17\x00"
 
@@ -88,7 +84,6 @@ jobs:
           if c1 > 0:
               data = data.replace(f_1296, f_1512)
 
-          # Fallback-Text-Limits und AVS-Logmeldungen direkt im Binary patchen[cite: 6]
           s_orig = b"set 1.296"
           s_patch = b"set 1.512"
           c2 = data.count(s_orig)
