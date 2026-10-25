@@ -1,0 +1,71 @@
+name: Build Hardcore Optimized Kernel
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-hardcore:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies & Toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+                              bison flex libncurses-dev libssl-dev bc libelf-dev \
+                              device-tree-compiler python3 git zip
+
+      - name: Clone RK3326 Kernel Source
+        run: |
+          git clone --depth=1 https://github.com/JustEnoughLinuxOS/rk3326-kernel.git -b rk3326-4.4 kernel_source
+          cd kernel_source
+          make ARCH=arm64 rk3326_defconfig
+
+      - name: Strip Debug Bloat & Apply Hardcore Flags
+        run: |
+          cd kernel_source
+          
+          # Debugging-Code restriktiv entfernen, um RAM und CPU-Zyklen zu sparen
+          sed -i 's/CONFIG_DEBUG_KERNEL=y/# CONFIG_DEBUG_KERNEL is not set/' .config
+          sed -i 's/CONFIG_DEBUG_INFO=y/# CONFIG_DEBUG_INFO is not set/' .config
+          sed -i 's/CONFIG_PAGE_POISONING=y/# CONFIG_PAGE_POISONING is not set/' .config
+          sed -i 's/CONFIG_SLUB_DEBUG=y/# CONFIG_SLUB_DEBUG is not set/' .config
+          
+          # Low-Latency & Performance Flags
+          echo "CONFIG_PREEMPT=y" >> .config
+          echo "CONFIG_HZ_1000=y" >> .config
+          echo "CONFIG_HZ=1000" >> .config
+          echo "CONFIG_USB_VIDEO_CLASS=y" >> .config
+          
+          make ARCH=arm64 olddefconfig
+
+      - name: Compile with LTO and Cortex-A35 Tuning
+        run: |
+          cd kernel_source
+          export ARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          
+          # Aggressives -O3, Frame-Pointer-Entfernung und Link Time Optimization (-flto)
+          export KCFLAGS="-march=armv8-a+crc+crypto -mtune=cortex-a35 -O3 -pipe -fomit-frame-pointer -flto"
+          export LDFLAGS="-flto"
+          
+          # Paralleles Kompilieren
+          make -j$(nproc) Image dtbs
+
+      - name: Package Final Hardcore Image
+        run: |
+          mkdir -p hardcore_output
+          cp kernel_source/arch/arm64/boot/Image hardcore_output/Image
+          cp kernel_source/arch/arm64/boot/dts/rockchip/*.dtb hardcore_output/ || true
+          
+          zip -r m9pro_hardcore_kernel.zip hardcore_output
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: m9pro-hardcore-kernel-package
+          path: m9pro_hardcore_kernel.zip
+          retention-days: 30
