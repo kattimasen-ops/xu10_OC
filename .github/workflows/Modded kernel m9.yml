@@ -16,21 +16,34 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
                               bison flex libncurses-dev libssl-dev bc libelf-dev \
-                              python3 curl gzip bzip2 lzop xz-utils lz4 zstd llvm binutils zip git
+                              python3 curl gzip bzip2 lzop xz-utils lz4 zstd llvm binutils zip findutils git
 
       - name: Clone RK3326 Kernel Source
         run: |
           git clone --depth=1 https://github.com/JustEnoughLinuxOS/rk3326-kernel.git -b main kernel_source
+
+      - name: Configure Kernel with Auto-Detect Defconfig
+        run: |
           cd kernel_source
-          make ARCH=arm64 rk3326_defconfig
+          export ARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          
+          # Suche nach einer passenden rk3326 oder arm64 defconfig im Repo
+          DEFCONFIG=$(find arch/arm64/configs -name "*rk3326*" -o -name "*defconfig" | head -n 1)
+          echo "Gefundene Defconfig: $DEFCONFIG"
+          
+          CONFIG_NAME=$(basename "$DEFCONFIG")
+          CONFIG_TARGET=${CONFIG_NAME%_defconfig}
+          
+          make ARCH=arm64 "$CONFIG_TARGET"
 
       - name: Apply Hardcore Configs & Strip Debug Bloat
         run: |
           cd kernel_source
-          sed -i 's/CONFIG_DEBUG_KERNEL=y/# CONFIG_DEBUG_KERNEL is not set/' .config
-          sed -i 's/CONFIG_DEBUG_INFO=y/# CONFIG_DEBUG_INFO is not set/' .config
-          sed -i 's/CONFIG_PAGE_POISONING=y/# CONFIG_PAGE_POISONING is not set/' .config
-          sed -i 's/CONFIG_SLUB_DEBUG=y/# CONFIG_SLUB_DEBUG is not set/' .config
+          sed -i 's/CONFIG_DEBUG_KERNEL=y/# CONFIG_DEBUG_KERNEL is not set/' .config || true
+          sed -i 's/CONFIG_DEBUG_INFO=y/# CONFIG_DEBUG_INFO is not set/' .config || true
+          sed -i 's/CONFIG_PAGE_POISONING=y/# CONFIG_PAGE_POISONING is not set/' .config || true
+          sed -i 's/CONFIG_SLUB_DEBUG=y/# CONFIG_SLUB_DEBUG is not set/' .config || true
           
           echo "CONFIG_PREEMPT=y" >> .config
           echo "CONFIG_HZ_1000=y" >> .config
