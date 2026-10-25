@@ -1,155 +1,91 @@
-name: Build & Hex-Patch Perfect M9 Pro Image
+name: Build Legacy RK3326 Kernel
 
 on:
   workflow_dispatch:
 
 jobs:
-  build-and-patch-image:
+  build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Dependencies
+      - name: Install Dependencies & Compatible GCC
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
-                              bison flex libncurses-dev libssl-dev bc libelf-dev \
-                              python3 curl gzip bzip2 lzop xz-utils lz4 zstd llvm binutils zip findutils git
+          sudo apt-get install -y \
+            build-essential \
+            gcc-12 \
+            g++-12 \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            bc \
+            bison \
+            flex \
+            libssl-dev \
+            libelf-dev \
+            git
 
-      - name: Clone RK3326 Kernel Source
+      - name: Prepare Legacy Kernel Source
         run: |
-          git clone --depth=1 https://github.com/JustEnoughLinuxOS/rk3326-kernel.git -b main kernel_source
+          # Falls sich die Source im Repo befindet, diesen Klon-Schritt anpassen
+          # git clone <deine-alte-source-url> kernel_source
+          if [ ! -d "kernel_source" ]; then
+            echo "Fehler: Ordner kernel_source nicht gefunden!"
+            exit 1
+          fi
 
-      - name: Configure Kernel with Auto-Detect Defconfig
+      - name: Apply Comprehensive Legacy Patches
+        run: |
+          cd kernel_source
+          
+          # 1. C-Standard auf gnu89 erzwingen (verhindert Inline-Fehler in alten Kerneln)
+          sed -i '1i KBUILD_CFLAGS += -std=gnu89 -fno-pie -fno-stack-protector -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=implicit-function-declaration' Makefile
+          
+          # 2. file2alias.c Syntax-Fehler für moderne Toolchains beheben
+          if [ -f scripts/mod/file2alias.c ]; then
+            sed -i 's/SIZE_\([a-zA-Z0-9_]*\)/sizeof(struct \1)/g' scripts/mod/file2alias.c
+          fi
+          
+          # 3. Alle -Werror Instanzen global entfernen, damit Warnungen den Build nicht abbrechen
+          find . -name "Makefile" -o -name "Kbuild" | xargs sed -i 's/-Werror//g' || true
+          sed -i 's/-Werror//g' Makefile || true
+
+      - name: Configure Kernel Defconfig
         run: |
           cd kernel_source
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
+          export CC=gcc-12
           
-          DEFCONFIG=$(find arch/arm64/configs -name "*rk3326*" -o -name "*defconfig" | head -n 1)
-          echo "Gefundene Defconfig: $DEFCONFIG"
-          
-          CONFIG_NAME=$(basename "$DEFCONFIG")
-          CONFIG_TARGET=${CONFIG_NAME%_defconfig}
-          
-          make ARCH=arm64 "$CONFIG_TARGET"
+          # Automatische Erkennung der passenden RK3326-Defconfig
+          DEFCONFIG=$(find arch/arm64/configs -name "*rk3326*" -o -name "*odroidgoa*" -o -name "*defconfig*" | head -n 1)
+          if [ -z "$DEFCONFIG" ]; then
+            echo "Keine spezifische Defconfig gefunden, nutze Standard."
+            make defconfig
+          else
+            CONFIG_NAME=$(basename "$DEFCONFIG")
+            make ${CONFIG_NAME%_defconfig}
+          fi
 
-      - name: Fix file2alias.c GCC Error
-        run: |
-          cd kernel_source
-          sed -i 's/SIZE_parisc_device_id/sizeof(struct parisc_device_id)/g' scripts/mod/file2alias.c || true
-          sed -i 's/SIZE_sdio_device_id/sizeof(struct sdio_device_id)/g' scripts/mod/file2alias.c || true
-          sed -i 's/SIZE_ssb_device_id/sizeof(struct ssb_device_id)/g' scripts/mod/file2alias.c || true
-          sed -i 's/SIZE_bcma_device_id/sizeof(struct bcma_device_id)/g' scripts/mod/file2alias.c || true
-          sed -i 's/SIZE_virtio_device_id/sizeof(struct virtio_device_id)/g' scripts/mod/file2alias.c || true
-          sed -i 's/SIZE_hv_vmbus_device_id/sizeof(struct hv_vmbus_device_id)/g' scripts/mod/file2alias.c || true
-          sed -i 's/SIZE_i2c_device_id/sizeof(struct i2c_device_id)/g' scripts/mod/file2alias.c || true
-          sed -i 's/SIZE_spi_device_id/sizeof(struct spi_device_id)/g' scripts/mod/file2alias.c || true
-          sed -i 's/SIZE_dmi_system_id/sizeof(struct dmi_system_id)/g' scripts/mod/file2alias.c || true
-          sed -i 's/SIZE_platform_device_id/sizeof(struct platform_device_id)/g' scripts/mod/file2alias.c || true
-          sed -i 's/SIZE_mdio_device_id/sizeof(struct mdio_device_id)/g' scripts/mod/file2alias.c || true
-          sed -i 's/SIZE_zorro_device_id/sizeof(struct zorro_device_id)/g' scripts/mod/file2alias.c || true
-          sed -i 's/SIZE_isapnp_device_id/sizeof(struct isapnp_device_id)/g' scripts/mod/file2alias.c || true
-          sed -i 's/SIZE_ipack_device_id/sizeof(struct ipack_device_id)/g' scripts/mod/file2alias.c || true
-          sed -i 's/SIZE_amba_id/sizeof(struct amba_id)/g' scripts/mod/file2alias.c || true
-          sed -i 's/SIZE_mips_cdmm_device_id/sizeof(struct mips_cdmm_device_id)/g' scripts/mod/file2alias.c || true
-          sed -i 's/SIZE_x86_cpu_id/sizeof(struct x86_cpu_id)/g' scripts/mod/file2alias.c || true
-          sed -i 's/SIZE_cpu_feature/sizeof(struct cpu_feature)/g' scripts/mod/file2alias.c || true
-          sed -i 's/SIZE_mei_cl_device_id/sizeof(struct mei_cl_device_id)/g' scripts/mod/file2alias.c || true
-          sed -i 's/SIZE_rio_device_id/sizeof(struct rio_device_id)/g' scripts/mod/file2alias.c || true
-          sed -i 's/SIZE_ulpi_device_id/sizeof(struct ulpi_device_id)/g' scripts/mod/file2alias.c || true
-          sed -i 's/SIZE_hda_device_id/sizeof(struct hda_device_id)/g' scripts/mod/file2alias.c || true
-          sed -i 's/SIZE_of_device_id/sizeof(struct of_device_id)/g' scripts/mod/file2alias.c || true
-
-      - name: Apply Hardcore Configs & Strip Debug Bloat
-        run: |
-          cd kernel_source
-          sed -i 's/CONFIG_DEBUG_KERNEL=y/# CONFIG_DEBUG_KERNEL is not set/' .config || true
-          sed -i 's/CONFIG_DEBUG_INFO=y/# CONFIG_DEBUG_INFO is not set/' .config || true
-          sed -i 's/CONFIG_PAGE_POISONING=y/# CONFIG_PAGE_POISONING is not set/' .config || true
-          sed -i 's/CONFIG_SLUB_DEBUG=y/# CONFIG_SLUB_DEBUG is not set/' .config || true
-          
-          echo "CONFIG_PREEMPT=y" >> .config
-          echo "CONFIG_HZ_1000=y" >> .config
-          echo "CONFIG_HZ=1000" >> .config
-          echo "CONFIG_USB_VIDEO_CLASS=y" >> .config
-          
-          make ARCH=arm64 olddefconfig
-
-      - name: Compile Kernel with Aggressive LTO & Cortex-A35 Flags
+      - name: Compile Kernel, Modules and Device Trees
         run: |
           cd kernel_source
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
+          export CC=gcc-12
           
-          export KCFLAGS="-march=armv8-a+crc+crypto -mtune=cortex-a35 -O3 -pipe -fomit-frame-pointer -flto"
-          export LDFLAGS="-flto"
-          
-          make -j$(nproc) Image
+          # Maximale Integration durch paralleles Bauen von Image, Modulen und DTBs
+          make -j$(nproc) Image modules dtbs
 
-      - name: Unpack & Analyze Kernel Binary
+      - name: Collect Build Artifacts
         run: |
-          curl -sSL https://raw.githubusercontent.com/torvalds/linux/master/scripts/extract-vmlinux -o extract-vmlinux
-          chmod +x extract-vmlinux
-          
-          ./extract-vmlinux kernel_source/arch/arm64/boot/Image > vmlinux_uncompressed
-          
-          echo "=== Kernel Version & Frequenz-Check ==="
-          strings vmlinux_uncompressed | grep -i "Linux version" || true
-          strings vmlinux_uncompressed | grep -E "1296000|1368000|1512000" | head -n 20 || true
+          mkdir -p final_output
+          cp kernel_source/arch/arm64/boot/Image final_output/
+          find kernel_source/arch/arm64/boot/dts/ -name "*.dtb" -exec cp {} final_output/ \;
 
-      - name: In-Place Hex-Patching des Kernel-Images
-        run: |
-          python3 - << 'EOF'
-          import shutil
-
-          src_image = "kernel_source/arch/arm64/boot/Image"
-          target_image = "Image"
-          shutil.copyfile(src_image, target_image)
-
-          with open(target_image, "rb") as f:
-              data = bytearray(f.read())
-
-          orig_size = len(data)
-          print(f"Originale Kernel-Image-Größe: {orig_size} Bytes")
-
-          f_1296 = b"\x80\xC6\x13\x00"
-          f_1512 = b"\xA0\x12\x17\x00"
-
-          c1 = data.count(f_1296)
-          print(f"Gefundene Frequenz-Tabellen-Einträge (1.296 GHz): {c1}")
-          if c1 > 0:
-              data = data.replace(f_1296, f_1512)
-
-          s_orig = b"set 1.296"
-          s_patch = b"set 1.512"
-          c2 = data.count(s_orig)
-          print(f"Gefundene Text-Limits: {c2}")
-          if c2 > 0:
-              data = data.replace(s_orig, s_patch)
-
-          if len(data) != orig_size:
-              print("FEHLER: Dateigröße hat sich unerwartet verändert!")
-              exit(1)
-
-          with open(target_image, "wb") as f:
-              f.write(data)
-
-          print("Hex-Patch erfolgreich in das Image-Binary eingebrannt!")
-          EOF
-
-      - name: Package Final M9 Pro Image Bundle
-        run: |
-          mkdir -p final_m9pro_image
-          cp Image final_m9pro_image/Image
-          
-          zip -r m9pro_perfect_optimized_image.zip final_m9pro_image
-
-      - name: Upload Final Artifact
+      - name: Upload Output
         uses: actions/upload-artifact@v4
         with:
-          name: m9pro-perfect-optimized-image
-          path: m9pro_perfect_optimized_image.zip
-          retention-days: 30
+          name: legacy-rk3326-kernel-output
+          path: final_output/
