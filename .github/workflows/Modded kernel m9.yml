@@ -28,7 +28,6 @@ jobs:
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
           
-          # Suche nach einer passenden rk3326 oder arm64 defconfig im Repo
           DEFCONFIG=$(find arch/arm64/configs -name "*rk3326*" -o -name "*defconfig" | head -n 1)
           echo "Gefundene Defconfig: $DEFCONFIG"
           
@@ -36,6 +35,33 @@ jobs:
           CONFIG_TARGET=${CONFIG_NAME%_defconfig}
           
           make ARCH=arm64 "$CONFIG_TARGET"
+
+      - name: Fix file2alias.c GCC Error
+        run: |
+          cd kernel_source
+          sed -i 's/SIZE_parisc_device_id/sizeof(struct parisc_device_id)/g' scripts/mod/file2alias.c || true
+          sed -i 's/SIZE_sdio_device_id/sizeof(struct sdio_device_id)/g' scripts/mod/file2alias.c || true
+          sed -i 's/SIZE_ssb_device_id/sizeof(struct ssb_device_id)/g' scripts/mod/file2alias.c || true
+          sed -i 's/SIZE_bcma_device_id/sizeof(struct bcma_device_id)/g' scripts/mod/file2alias.c || true
+          sed -i 's/SIZE_virtio_device_id/sizeof(struct virtio_device_id)/g' scripts/mod/file2alias.c || true
+          sed -i 's/SIZE_hv_vmbus_device_id/sizeof(struct hv_vmbus_device_id)/g' scripts/mod/file2alias.c || true
+          sed -i 's/SIZE_i2c_device_id/sizeof(struct i2c_device_id)/g' scripts/mod/file2alias.c || true
+          sed -i 's/SIZE_spi_device_id/sizeof(struct spi_device_id)/g' scripts/mod/file2alias.c || true
+          sed -i 's/SIZE_dmi_system_id/sizeof(struct dmi_system_id)/g' scripts/mod/file2alias.c || true
+          sed -i 's/SIZE_platform_device_id/sizeof(struct platform_device_id)/g' scripts/mod/file2alias.c || true
+          sed -i 's/SIZE_mdio_device_id/sizeof(struct mdio_device_id)/g' scripts/mod/file2alias.c || true
+          sed -i 's/SIZE_zorro_device_id/sizeof(struct zorro_device_id)/g' scripts/mod/file2alias.c || true
+          sed -i 's/SIZE_isapnp_device_id/sizeof(struct isapnp_device_id)/g' scripts/mod/file2alias.c || true
+          sed -i 's/SIZE_ipack_device_id/sizeof(struct ipack_device_id)/g' scripts/mod/file2alias.c || true
+          sed -i 's/SIZE_amba_id/sizeof(struct amba_id)/g' scripts/mod/file2alias.c || true
+          sed -i 's/SIZE_mips_cdmm_device_id/sizeof(struct mips_cdmm_device_id)/g' scripts/mod/file2alias.c || true
+          sed -i 's/SIZE_x86_cpu_id/sizeof(struct x86_cpu_id)/g' scripts/mod/file2alias.c || true
+          sed -i 's/SIZE_cpu_feature/sizeof(struct cpu_feature)/g' scripts/mod/file2alias.c || true
+          sed -i 's/SIZE_mei_cl_device_id/sizeof(struct mei_cl_device_id)/g' scripts/mod/file2alias.c || true
+          sed -i 's/SIZE_rio_device_id/sizeof(struct rio_device_id)/g' scripts/mod/file2alias.c || true
+          sed -i 's/SIZE_ulpi_device_id/sizeof(struct ulpi_device_id)/g' scripts/mod/file2alias.c || true
+          sed -i 's/SIZE_hda_device_id/sizeof(struct hda_device_id)/g' scripts/mod/file2alias.c || true
+          sed -i 's/SIZE_of_device_id/sizeof(struct of_device_id)/g' scripts/mod/file2alias.c || true
 
       - name: Apply Hardcore Configs & Strip Debug Bloat
         run: |
