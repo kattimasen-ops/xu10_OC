@@ -1,40 +1,62 @@
-name: Build Hardcore Optimized Kernel
+name: Build Ultimate M9 Pro Optimized Image & Kernel
 
 on:
+  push:
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
-  build-hardcore:
+  build-ultimate:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Dependencies & Toolchain
+      - name: Install System Dependencies & Toolchain
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
                               bison flex libncurses-dev libssl-dev bc libelf-dev \
-                              device-tree-compiler python3 git zip
+                              device-tree-compiler python3 powershell binwalk zip git
+
+      - name: Execute Binary & String Patches
+        run: |
+          python3 - << 'EOF'
+          import os, sys
+
+          target_filename = "console_detect"
+          for root, dirs, files in os.walk("."):
+              if target_filename in files:
+                  path = os.path.join(root, target_filename)
+                  with open(path, "rb") as f:
+                      data = f.read()
+                  old = b"rk3326-r36tmax-linux.dtb"
+                  new = b"rk3326-m9pro-linux.dtb\x00\x00"
+                  if old in data:
+                      data = data.replace(old, new)
+                      with open(path, "wb") as f:
+                          f.write(data)
+                      print(f"[+] Patched binary string in {path}")
+          EOF
 
       - name: Clone RK3326 Kernel Source
         run: |
-          git clone --depth=1 https://github.com/JustEnoughLinuxOS/rk3326-kernel.git -b rk3326-4.4 kernel_source
+          git clone --depth=1 https://github.com/JustEnoughLinuxOS/rk3326-kernel.git -b main kernel_source
           cd kernel_source
           make ARCH=arm64 rk3326_defconfig
 
-      - name: Strip Debug Bloat & Apply Hardcore Flags
+      - name: Strip Debug Bloat & Apply Hardcore Kernel Configs
         run: |
           cd kernel_source
           
-          # Debugging-Code restriktiv entfernen, um RAM und CPU-Zyklen zu sparen
+          # Debugging-Overhead entfernen, um Cache zu sparen
           sed -i 's/CONFIG_DEBUG_KERNEL=y/# CONFIG_DEBUG_KERNEL is not set/' .config
           sed -i 's/CONFIG_DEBUG_INFO=y/# CONFIG_DEBUG_INFO is not set/' .config
           sed -i 's/CONFIG_PAGE_POISONING=y/# CONFIG_PAGE_POISONING is not set/' .config
           sed -i 's/CONFIG_SLUB_DEBUG=y/# CONFIG_SLUB_DEBUG is not set/' .config
           
-          # Low-Latency & Performance Flags
+          # Low-Latency, 1000Hz Timer & UVC Support aktivieren
           echo "CONFIG_PREEMPT=y" >> .config
           echo "CONFIG_HZ_1000=y" >> .config
           echo "CONFIG_HZ=1000" >> .config
@@ -42,30 +64,98 @@ jobs:
           
           make ARCH=arm64 olddefconfig
 
-      - name: Compile with LTO and Cortex-A35 Tuning
+      - name: Compile Kernel with Aggressive LTO & Cortex-A35 Flags
         run: |
           cd kernel_source
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
           
-          # Aggressives -O3, Frame-Pointer-Entfernung und Link Time Optimization (-flto)
+          # Maximale Compiler-Optimierungen (-O3, LTO, Frame-Pointer-Entfernung)
           export KCFLAGS="-march=armv8-a+crc+crypto -mtune=cortex-a35 -O3 -pipe -fomit-frame-pointer -flto"
           export LDFLAGS="-flto"
           
-          # Paralleles Kompilieren
           make -j$(nproc) Image dtbs
 
-      - name: Package Final Hardcore Image
+      - name: Execute Advanced Overclock & DTB Patch
+        shell: pwsh
         run: |
-          mkdir -p hardcore_output
-          cp kernel_source/arch/arm64/boot/Image hardcore_output/Image
-          cp kernel_source/arch/arm64/boot/dts/rockchip/*.dtb hardcore_output/ || true
+          $dtb = Get-ChildItem -Filter "*.dtb" -Recurse | Select-Object -First 1
+          if (-not $dtb) {
+              # Fallback: Suche im frisch geklonten Kernel Source
+              $dtb = Get-ChildItem -Path "kernel_source" -Filter "*.dtb" -Recurse | Select-Object -First 1
+          }
           
-          zip -r m9pro_hardcore_kernel.zip hardcore_output
+          if (-not $dtb) {
+              Write-Host "ERROR: Keine .dtb Datei gefunden!"
+              exit 1
+          }
+          
+          $dtbPath = $dtb.FullName
+          Write-Host "Verwende DTB: $dtbPath"
 
-      - name: Upload Artifact
+          $tmpDts = "$env:RUNNER_TEMP/patch.dts"
+          dtc -I dtb -O dts -o $tmpDts $dtbPath
+
+          $s = Get-Content -Raw -LiteralPath $tmpDts
+          
+          # OPP-Tabellen und Spannungs-Obergrenzen für den RK3326 anpassen
+          $s = [System.Text.RegularExpressions.Regex]::Replace($s, '(cpu0-opp-table\s*\{.*?rockchip,max-volt\s*=\s*)<[^;]+>;', '${1}<0x155cc0>;')
+          
+          # Frequenzen bis 1.512 GHz einbrennen
+          $frequencies = @(
+              @{Freq=1368000000; Uv=1350000; Anchor=1296000000},
+              @{Freq=1416000000; Uv=1400000; Anchor=1368000000},
+              @{Freq=1440000000; Uv=1400000; Anchor=1416000000},
+              @{Freq=1464000000; Uv=1400000; Anchor=1440000000},
+              @{Freq=1488000000; Uv=1400000; Anchor=1464000000},
+              @{Freq=1512000000; Uv=1400000; Anchor=1488000000}
+          )
+
+          foreach ($item in $frequencies) {
+              if ($s -notmatch "opp-$($item.Freq)") {
+                  $anchorStr = "opp-$($item.Anchor)"
+                  $anchorIdx = $s.IndexOf($anchorStr)
+                  if ($anchorIdx -ge 0) {
+                      $block = "`n`topp-$($item.Freq) {`n`t`topp-hz = <0x00 0x$([string]::Format('{0:x}',$item.Freq))>;`n`t`topp-microvolt = <0x$([string]::Format('{0:x}', $item.Uv)) 0x$([string]::Format('{0:x}', $item.Uv)) 0x$([string]::Format('{0:x}', $item.Uv))>;`n`t`tclock-latency-ns = <0x9c40>;`n`t};"
+                      $braceDepth = 0$insertIdx = -1
+                      for ($i = $anchorIdx; $i -lt $s.Length; $i++) {
+                          if ($s[$i] -eq '{') {$braceDepth++ }
+                          elseif ($s[$i] -eq '}') {$braceDepth--
+                              if ($braceDepth -eq 0) {$insertIdx = $s.IndexOf(';',$i) + 1
+                                  break
+                              }
+                          }
+                      }
+                      if ($insertIdx -gt 0) {
+                          $s =$s.Insert($insertIdx,$block)
+                      }
+                  }
+              }
+          }
+
+          Set-Content -LiteralPath $tmpDts -Value$s -NoNewline
+          dtc -I dts -O dtb -o $dtbPath$tmpDts
+          Write-Host "DTB erfolgreich auf maximale Performance gepatcht!"
+
+          # Für das Packaging speichern
+          Copy-Item -LiteralPath $dtbPath -Destination "$env:RUNNER_TEMP/patched.dtb" -Force
+
+      - name: Package Final SD-Card Bundle
+        run: |
+          mkdir -p final_m9pro_package
+          
+          # Kompilierten Kernel kopieren
+          cp kernel_source/arch/arm64/boot/Image final_m9pro_package/Image
+          
+          # Gepatchte DTB kopieren
+          cp ${{ runner.temp }}/patched.dtb final_m9pro_package/rk3326-m9pro-linux.dtb
+          
+          # Archiv schnüren
+          zip -r m9pro_ultimate_optimized_package.zip final_m9pro_package
+
+      - name: Upload Final Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: m9pro-hardcore-kernel-package
-          path: m9pro_hardcore_kernel.zip
+          name: m9pro-ultimate-optimized-package
+          path: m9pro_ultimate_optimized_package.zip
           retention-days: 30
